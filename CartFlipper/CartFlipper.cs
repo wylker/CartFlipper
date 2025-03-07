@@ -146,9 +146,8 @@ namespace CartFlipperMod
             }
         }
 
-        /// <summary>
-        /// Helper method to parse a UID string in the format "UserID:RandomID" into a ZDOID.
-        /// </summary>
+
+        // Helper to parse a UID string in the format "UserID:RandomID" into a ZDOID.
         private ZDOID ParseZDOID(string uidStr)
         {
             string[] parts = uidStr.Split(':');
@@ -162,10 +161,8 @@ namespace CartFlipperMod
             throw new Exception("Invalid ZDOID string: " + uidStr);
         }
 
-        /// <summary>
-        /// Server-side: receives the cart's UID (as a string), converts it back to a ZDOID,
-        /// retrieves its ZDO via ZDOMan, finds the cart GameObject, and flips it upright.
-        /// </summary>
+        // Server receives the cart's UID (as a string), converts it back to a ZDOID,
+        // retrieves its ZDO via ZDOMan, finds the cart GameObject, and flips it upright.
         private void RPC_FlipCart(long sender, ZPackageType pkg)
         {
             Logger.LogInfo("RPC_FlipCart received on server. Sender: " + sender);
@@ -225,9 +222,7 @@ namespace CartFlipperMod
             }
         }
 
-        /// <summary>
-        /// Determines if the transform is recognized as a cart.
-        /// </summary>
+        //checks by name or tag if the target object is a cart
         private bool IsCart(Transform t)
         {
             bool nameContains = t.name.Contains("Cart");
@@ -240,9 +235,7 @@ namespace CartFlipperMod
             return nameContains || tagCheck;
         }
 
-        /// <summary>
-        /// Checks once if a given tag exists.
-        /// </summary>
+        // Checks once if a given tag exists.
         private bool TagExists(string tag)
         {
             if (!initializedHasCartTag)
@@ -261,9 +254,7 @@ namespace CartFlipperMod
             return hasCartTag;
         }
 
-        /// <summary>
-        /// Checks whether the object's "up" vector is mostly downward.
-        /// </summary>
+        // Does the cart need flipped? uses delta of angle
         private bool IsFlipped(Transform t)
         {
             float angle = Vector3.Angle(t.up, Vector3.up);
@@ -271,9 +262,7 @@ namespace CartFlipperMod
             return angle > 90f;
         }
 
-        /// <summary>
-        /// Determines if we're running as a server.
-        /// </summary>
+        // Determines if we're running as a server - maybe not needed anymore?
         private bool IsServer()
         {
             bool isServer = ZNetType.instance != null && ZNetType.instance.IsServer();
