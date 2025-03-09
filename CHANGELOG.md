@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.0.1 - Release Candidate
+* Fixed server/client version check
+
 ## v1.0.0 - Release Candidate
 * Added configuration file
 * Greatly improved physics

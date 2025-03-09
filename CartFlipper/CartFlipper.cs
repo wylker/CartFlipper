@@ -11,7 +11,7 @@ namespace CartFlipperMod
 {
     public static class Constants
     {
-        public const string ModVersion = "1.0.0";
+        public const string ModVersion = "1.0.1";
     }
 
     [BepInPlugin("wylker.cartflipper", "Cart Flipper", Constants.ModVersion)]
@@ -353,25 +353,58 @@ namespace CartFlipperMod
             Logger.LogInfo("Client sent mod version: " + Constants.ModVersion);
         }
 
-        /// <summary>
-        /// Server-side method to request mod versions from all connected peers.
-        /// </summary>
+        // Server-side method to request mod versions from all connected peers.
         private void RequestModVersionFromAllPeers()
         {
-            foreach (var peer in ZNet.instance.m_peers)
+            try
             {
-                try
+                // Use reflection to access the private m_peers field from ZNet.
+                var peersField = typeof(ZNet).GetField("m_peers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (peersField == null)
                 {
-                    ZPackage pkg = new ZPackage();
-                    ZRoutedRpc.instance.InvokeRoutedRPC(peer.m_uid, "RPC_RequestModVersion", pkg);
-                    Logger.LogInfo("Server requested mod version from peer: " + peer.m_uid);
+                    Logger.LogWarning("Could not find the m_peers field on ZNet.");
+                    return;
                 }
-                catch (Exception ex)
+
+                // Retrieve the list of peers.
+                var peersObj = peersField.GetValue(ZNet.instance);
+                if (peersObj is System.Collections.IEnumerable peers)
                 {
-                    Logger.LogWarning("Failed to request mod version from peer " + peer.m_uid + ": " + ex.Message);
+                    foreach (var peer in peers)
+                    {
+                        // Assuming each peer has a property 'm_uid' or similar identifying value.
+                        // If needed, adjust how you retrieve the peer's identifier.
+                        try
+                        {
+                            // Use reflection to get the peer's uid. Adjust field name if necessary.
+                            var uidField = peer.GetType().GetField("m_uid", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            if (uidField == null)
+                            {
+                                Logger.LogWarning("Could not find m_uid on a peer.");
+                                continue;
+                            }
+                            long peerId = (long)uidField.GetValue(peer);
+                            ZPackage pkg = new ZPackage();
+                            ZRoutedRpc.instance.InvokeRoutedRPC(peerId, "RPC_RequestModVersion", pkg);
+                            Logger.LogInfo("Server requested mod version from peer: " + peerId);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning("Failed to request mod version from a peer: " + ex.Message);
+                        }
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning("m_peers field did not return an enumerable.");
                 }
             }
+            catch (Exception ex)
+            {
+                Logger.LogWarning("Exception in RequestModVersionFromAllPeers: " + ex.Message);
+            }
         }
+
         private bool IsServer()
         {
             return ZNet.instance != null && ZNet.instance.IsServer();
