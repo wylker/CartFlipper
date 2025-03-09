@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.1.0 - Release Candidate
+* Switched to ServerSync for version check my custom method was awful
+
 ## v1.0.1 - Release Candidate
 * Fixed server/client version check
 
