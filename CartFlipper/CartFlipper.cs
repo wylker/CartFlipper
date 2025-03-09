@@ -6,33 +6,38 @@ using System;
 using System.Collections;
 using System.IO;
 using Valheim;
+using ServerSync;
+using System.Net;
 
 namespace CartFlipperMod
 {
     public static class Constants
     {
-        public const string ModVersion = "1.0.1";
+        public const string ModVersion = "1.1.0";
     }
 
     [BepInPlugin("wylker.cartflipper", "Cart Flipper", Constants.ModVersion)]
     public class CartFlipper : BaseUnityPlugin
     {
-        // Configuration
         private ConfigEntry<KeyCode> configFlipKey;
         private ConfigEntry<int> configMaxRetries;
-
-        // Store the currently hovered interactable.
+        private static readonly ConfigSync ConfigSync = new("wylker.cartflipper") { DisplayName = "Cart Flipper", CurrentVersion = Constants.ModVersion, MinimumRequiredVersion = Constants.ModVersion };
         public static Interactable CurrentHoveredInteractable;
         public static KeyCode ConfigFlipKey { get; private set; }
-
         private Harmony harmony;
 
         private void Awake()
         {
-            Logger.LogInfo("CartFlipper mod loaded (v"+Constants.ModVersion+")");
+            Logger.LogInfo("CartFlipper mod loaded (v" + Constants.ModVersion + ").");
+
             // Bind configuration settings.
             configFlipKey = Config.Bind("General", "FlipKey", KeyCode.O, "The key used to flip the cart.");
             configMaxRetries = Config.Bind("General", "MaxRetries", 3, "Carts are often stubborn about being flipped. Set the maximum number of automatic flip attempts per keypress.");
+            ConfigSync.AddConfigEntry(configFlipKey);
+            ConfigSync.AddConfigEntry(configMaxRetries);
+
+            // Store the configured key for use in our Harmony patch.
+            ConfigFlipKey = configFlipKey.Value;
 
             harmony = new Harmony("com.wylker.cartflipper.patch");
             harmony.PatchAll();
@@ -47,30 +52,17 @@ namespace CartFlipperMod
         {
             // Wait until the global RPC system is ready.
             yield return new WaitUntil(() => ZRoutedRpc.instance != null);
-            ConfigFlipKey = configFlipKey.Value;
+
+            // Register RPC handler
             ZRoutedRpc.instance.Register("RPC_FlipCart", new Action<long, ZPackage>(RPC_FlipCart));
-            // Logger.LogInfo("Registered RPC_FlipCart."); // Debug loading.
-            if (IsServer())
-            {
-                // Server registers to receive client versions.
-                ZRoutedRpc.instance.Register("RPC_SendModVersion", new Action<long, ZPackage>(RPC_SendModVersion));
-                // Wait a few seconds for peers to connect, then request mod versions.
-                yield return new WaitForSeconds(5f);
-                RequestModVersionFromAllPeers();
-            }
-            else
-            {
-                // Client registers to respond to version requests.
-                ZRoutedRpc.instance.Register("RPC_RequestModVersion", new Action<long, ZPackage>(RPC_RequestModVersion));
-            }
+            Logger.LogInfo("Registered RPC_FlipCart.");
         }
 
         private void Update()
         {
-            // Check for the key press using the config value.
+            // Check for the configured key press.
             if (!Application.isBatchMode && Input.GetKeyDown(configFlipKey.Value))
             {
-                // Logger.LogInfo("Flip key pressed."); // Debug Key Detection
                 var hoveredObject = Player.m_localPlayer?.GetHoverObject();
                 if (hoveredObject != null)
                 {
@@ -91,14 +83,13 @@ namespace CartFlipperMod
             }
         }
 
-        // Check if the transform's name contains "Cart".
+        // Chect tagetted object - Is it a cart?
         private bool IsCart(Transform t)
         {
             return t.name.Contains("Cart");
         }
 
-        
-        // Returns true if the object's up vector forms an angle > 90° with Vector3.up.
+        // Is it upside down?
         private bool IsFlipped(Transform t)
         {
             float angle = Vector3.Angle(t.up, Vector3.up);
@@ -106,8 +97,7 @@ namespace CartFlipperMod
             return angle > 90f;
         }
 
-        
-        // Convert a ZDOID to a long representation.
+        // converting ZDOID to long
         private long ZDOIDToLong(ZDOID id)
         {
             ZPackage tempPkg = new ZPackage();
@@ -116,9 +106,7 @@ namespace CartFlipperMod
             return tempPkg.ReadLong();
         }
 
-        
-        // Sends an RPC to flip the specified cart.
-        
+        // Send RPC to server for flip request
         private void FlipCart(GameObject cartObject)
         {
             var cartNetView = cartObject.GetComponent<ZNetView>();
@@ -142,7 +130,7 @@ namespace CartFlipperMod
                 {
                     long senderId = ZDOIDToLong(playerNetView.GetZDO().m_uid);
                     // Send the cart's UID as a string.
-                    string cartUidStr = zdo.m_uid.ToString();  // Format e.g., "1:14355"
+                    string cartUidStr = zdo.m_uid.ToString();  // e.g., "1:14355"
                     ZPackage pkg = new ZPackage();
                     pkg.Write(cartUidStr);
                     Logger.LogInfo("Sending RPC with sender id: " + senderId + " for cart UID: " + cartUidStr);
@@ -160,8 +148,8 @@ namespace CartFlipperMod
             }
         }
 
-        
-        // Parses a UID string (e.g., "1:14355") into a ZDOID.
+
+        // Convert UID string into a ZDOID. Expected format: "userId:randomId"
         private ZDOID ParseZDOID(string uidStr)
         {
             string[] parts = uidStr.Split(':');
@@ -174,9 +162,8 @@ namespace CartFlipperMod
             throw new Exception("Invalid ZDOID string: " + uidStr);
         }
 
-        
-        // Server-side RPC handler. Receives the cart's UID (as a string), converts it to a ZDOID,
-        // retrieves the cart's ZDO, and starts a coroutine to flip the cart upright.
+
+        // Server-side RPC handler. Receives the cart's UID (as a string), converts it to a ZDOID, starts coroutine to flip the cart
         public void RPC_FlipCart(long sender, ZPackage pkg)
         {
             Logger.LogInfo("RPC_FlipCart received on server. Sender: " + sender);
@@ -220,13 +207,12 @@ namespace CartFlipperMod
             }
             Logger.LogInfo("Found Rigidbody for cart object: " + cartObject.name);
 
-            // Start the coroutine to attempt flipping the cart with retries.
+            // Start the coroutine
             StartCoroutine(FlipCartCoroutine(cartObject));
         }
 
-
-        // Coroutine that attempts to flip the cart upright.
-        // Retries up to the configured max retries with a delay between attempts and temporarily increases drag.
+        
+        // Retries up to the configured max retries
         private IEnumerator FlipCartCoroutine(GameObject cartObject)
         {
             int maxRetries = configMaxRetries.Value;
@@ -238,21 +224,21 @@ namespace CartFlipperMod
                 yield break;
             }
 
-            // Store original drag and position values.
+            // Store original drag values.
             float originalDrag = rb.drag;
             float originalAngularDrag = rb.angularDrag;
-            Vector3 originalPos = rb.transform.position;
-
-            // Increase drag to help the cart settle.
+            // make it gentle
             rb.drag = originalDrag * 5f;
             rb.angularDrag = originalAngularDrag * 5f;
+            Vector3 originalPos = rb.transform.position;
+
+            float liftHeight = 0.75f;
 
             while (attempts < maxRetries)
             {
-                // Step 1: Lift the cart upward by 1.5 units over 1 second.
                 float liftDuration = 1f;
                 float liftTimer = 0f;
-                Vector3 targetLiftPos = originalPos + Vector3.up * 1.5f;
+                Vector3 targetLiftPos = originalPos + Vector3.up * liftHeight;
                 while (liftTimer < liftDuration)
                 {
                     liftTimer += Time.deltaTime;
@@ -260,7 +246,6 @@ namespace CartFlipperMod
                     yield return null;
                 }
 
-                // Step 2: Gradually rotate the cart to be upright over 3 seconds (preserving yaw).
                 Quaternion currentRot = rb.transform.rotation;
                 Quaternion targetRot = Quaternion.Euler(0f, currentRot.eulerAngles.y, 0f);
                 float rotateDuration = 3f;
@@ -273,7 +258,6 @@ namespace CartFlipperMod
                     yield return null;
                 }
 
-                // Step 3: Gently lower the cart back to its original position
                 float lowerDuration = 1f;
                 float lowerTimer = 0f;
                 while (lowerTimer < lowerDuration)
@@ -283,11 +267,9 @@ namespace CartFlipperMod
                     yield return null;
                 }
 
-                // Reset velocities.
+                // Reset velocities and settle it
                 rb.velocity = Vector3.zero;
                 rb.angularVelocity = Vector3.zero;
-
-                // Wait a moment to let physics settle.
                 yield return new WaitForSeconds(1f);
 
                 float angle = Vector3.Angle(rb.transform.up, Vector3.up);
@@ -309,126 +291,25 @@ namespace CartFlipperMod
                 Logger.LogWarning("Flip attempts exhausted; cart remains flipped.");
             }
         }
-        /// <summary>
-        /// Server-side RPC handler. Receives the mod version from a client, and disconnects the client if the version doesn't match.
-        /// </summary>
-        public void RPC_SendModVersion(long sender, ZPackage pkg)
-        {
-            string clientVersion = pkg.ReadString();
-            Logger.LogInfo("Server received mod version from client: " + clientVersion);
-            if (clientVersion != Constants.ModVersion)
-            {
-                Logger.LogWarning("Mod version mismatch! Server: " + Constants.ModVersion + " vs. Client: " + clientVersion);
-                // Disconnect the client.
-                if (ZNet.instance != null)
-                {
-                    Logger.LogWarning("Disconnecting client: " + sender);
-                    ZNetPeer peer = ZNet.instance.GetPeer(sender);
-                    if (peer != null)
-                    {
-                        ZNet.instance.Disconnect(peer);
-                    }
-                    else
-                    {
-                        Logger.LogWarning("Peer not found for sender: " + sender);
-                    }
-                }
-            }
-            else
-            {
-                Logger.LogInfo("Mod version match confirmed.");
-            }
-        }
-
-        /// <summary>
-        /// Client-side RPC handler: when the server requests the mod version, respond with our version.
-        /// </summary>
-        public void RPC_RequestModVersion(long sender, ZPackage pkg)
-        {
-            Logger.LogInfo("Client received mod version request from server.");
-            ZPackage response = new ZPackage();
-            response.Write(Constants.ModVersion);
-            long senderId = ZDOIDToLong(Player.m_localPlayer.GetComponent<ZNetView>().GetZDO().m_uid);
-            ZRoutedRpc.instance.InvokeRoutedRPC(senderId, "RPC_SendModVersion", response);
-            Logger.LogInfo("Client sent mod version: " + Constants.ModVersion);
-        }
-
-        // Server-side method to request mod versions from all connected peers.
-        private void RequestModVersionFromAllPeers()
-        {
-            try
-            {
-                // Use reflection to access the private m_peers field from ZNet.
-                var peersField = typeof(ZNet).GetField("m_peers", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (peersField == null)
-                {
-                    Logger.LogWarning("Could not find the m_peers field on ZNet.");
-                    return;
-                }
-
-                // Retrieve the list of peers.
-                var peersObj = peersField.GetValue(ZNet.instance);
-                if (peersObj is System.Collections.IEnumerable peers)
-                {
-                    foreach (var peer in peers)
-                    {
-                        // Assuming each peer has a property 'm_uid' or similar identifying value.
-                        // If needed, adjust how you retrieve the peer's identifier.
-                        try
-                        {
-                            // Use reflection to get the peer's uid. Adjust field name if necessary.
-                            var uidField = peer.GetType().GetField("m_uid", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                            if (uidField == null)
-                            {
-                                Logger.LogWarning("Could not find m_uid on a peer.");
-                                continue;
-                            }
-                            long peerId = (long)uidField.GetValue(peer);
-                            ZPackage pkg = new ZPackage();
-                            ZRoutedRpc.instance.InvokeRoutedRPC(peerId, "RPC_RequestModVersion", pkg);
-                            Logger.LogInfo("Server requested mod version from peer: " + peerId);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning("Failed to request mod version from a peer: " + ex.Message);
-                        }
-                    }
-                }
-                else
-                {
-                    Logger.LogWarning("m_peers field did not return an enumerable.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning("Exception in RequestModVersionFromAllPeers: " + ex.Message);
-            }
-        }
 
         private bool IsServer()
         {
             return ZNet.instance != null && ZNet.instance.IsServer();
         }
-}
+    }
 
-
-    // Harmony patch to add a hover text indicator for carts that are eligible for flipping.
+    // Harmony patch to add a "Flip" option to the cart's context menu.
     [HarmonyPatch(typeof(Vagon), "GetHoverText")]
     public static class Vagon_GetHoverText_Patch
     {
         static void Postfix(Vagon __instance, ref string __result)
         {
-            // Cast the instance to Component to access transform.
-            if (__instance is Component comp && comp.transform != null)
+            if (__instance.transform.name.Contains("Cart"))
             {
-                if (comp.transform.name.Contains("Cart"))
+                float angle = Vector3.Angle(__instance.transform.up, Vector3.up);
+                if (angle > 90f)
                 {
-                    // Calculate angle.
-                    float angle = Vector3.Angle(comp.transform.up, Vector3.up);
-                    if (angle > 90f)
-                    {
-                        __result += "\n[<color=yellow><b>" + CartFlipper.ConfigFlipKey.ToString() + "</b></color>] Flip";
-                    }
+                    __result += "\n[<color=yellow><b>" + CartFlipper.ConfigFlipKey.ToString() + "</b></color>] Flip";
                 }
             }
         }
