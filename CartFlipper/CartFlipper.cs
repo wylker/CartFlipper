@@ -211,7 +211,7 @@ namespace CartFlipperMod
             StartCoroutine(FlipCartCoroutine(cartObject));
         }
 
-        
+
         // Retries up to the configured max retries
         private IEnumerator FlipCartCoroutine(GameObject cartObject)
         {
@@ -296,8 +296,22 @@ namespace CartFlipperMod
         {
             return ZNet.instance != null && ZNet.instance.IsServer();
         }
-    }
 
+        ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
+        {
+            ConfigEntry<T> configEntry = Config.Bind(group, name, value, description);
+
+            SyncedConfigEntry<T> syncedConfigEntry = ConfigSync.AddConfigEntry(configEntry);
+            syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
+
+            return configEntry;
+        }
+
+        private ConfigEntry<T> config<T>(string group, string name, T value, string description, bool synchronizedSetting = true)
+        {
+            return config(group, name, value, new ConfigDescription(description), synchronizedSetting);
+        }
+    }
     // Harmony patch to add a "Flip" option to the cart's context menu.
     [HarmonyPatch(typeof(Vagon), "GetHoverText")]
     public static class Vagon_GetHoverText_Patch
